@@ -18,6 +18,8 @@ namespace RKV2_Tools
         public List<Entry> Entries = new();
         public List<Addendum> Addenda = new();
         public List<int> EntryNameTableOffsets = new();
+        public List<int> AddendumTableOffsets = new();
+        public List<int> FileDataOffsets = new();
         public string? Signature;
         public int EntryCount;
         public int EntryNameTableLength;
@@ -30,6 +32,7 @@ namespace RKV2_Tools
         public int MetaDataTableLength;
         public byte[]? EntryNameTable;
         public byte[]? AddendumTable;
+        public byte[]? FileData;
 
         public bool LoadRKV(string path)
         {
@@ -187,7 +190,7 @@ namespace RKV2_Tools
         public void GenerateEntryTable(string[] files)
         {
             // Calculate the total length of the name table
-            EntryNameTableLength = files.Sum(f => 1 + Path.GetFileName(f).Length);
+            EntryNameTableLength = files.Sum(f => 1 + Path.GetFileName(f).Length) + 1;
             // Create a memory stream to hold the byte array
             using MemoryStream stream = new(EntryNameTableLength);
             foreach (string file in files)
@@ -202,9 +205,54 @@ namespace RKV2_Tools
                 EntryNameTableOffsets.Add((int)stream.Position);
                 stream.Write(nameBytes, 0, nameBytes.Length);
             }
+            stream.WriteByte(0x0);
 
             // Get the byte array from the stream
             EntryNameTable = stream.ToArray();
+        }
+
+        public void GenerateAddendumTable(string[] files, string inputDir)
+        {
+            List<string> relativePaths = new();
+            foreach(string file in files)
+            {
+                string relativePath = Path.GetRelativePath(inputDir, file);
+                if (relativePath != Path.GetFileName(file))
+                {
+                    relativePaths.Add(relativePath);
+                }
+            }
+            AddendumTableLegnth = relativePaths.Sum(p => 1 + p.Length) + 1;
+
+            using MemoryStream stream = new(AddendumTableLegnth);
+            foreach (string path in relativePaths)
+            {
+                // Get the file name as a byte array in UTF-8 encoding
+                byte[] pathBytes = Encoding.UTF8.GetBytes(Path.GetFileName(path));
+
+                // Write the 0x0 byte separator
+                stream.WriteByte(0x0);
+
+                // Write the file name to the stream
+                AddendumTableOffsets.Add((int)stream.Position);
+                stream.Write(pathBytes, 0, pathBytes.Length);
+            }
+            stream.WriteByte(0x0);
+
+            // Get the byte array from the stream
+            AddendumTable = stream.ToArray();
+        }
+
+        public void GenerateFileData(string[] files)
+        {
+            MemoryStream combinedStream = new();
+            foreach (string file in files)
+            {
+                using FileStream fileStream = new(file, FileMode.Open, FileAccess.Read);
+                FileDataOffsets.Add((int)combinedStream.Position);
+                fileStream.CopyTo(combinedStream);
+            }
+            FileData = combinedStream.ToArray();
         }
 
         public void Repack(string inputDir, string outputDir)
@@ -213,6 +261,8 @@ namespace RKV2_Tools
             string[] files = Directory.GetFiles(inputDir, "*", SearchOption.AllDirectories);
             EntryCount = files.Length;
             GenerateEntryTable(files);
+            GenerateAddendumTable(files, inputDir);
+            GenerateFileData(files);
             AddendumCount = EntryCount - Directory.GetFiles(inputDir).Length;
             foreach (string file in Directory.GetFiles(inputDir, "*", SearchOption.AllDirectories))
             {
@@ -225,29 +275,61 @@ namespace RKV2_Tools
                 {
                     Name = entryName,
                     crc32eth = fileCrc32,
-                    NameTableOffset = EntryNameTableOffsets[stringIndex]
+                    NameTableOffset = EntryNameTableOffsets[stringIndex],
+                    Offset = FileDataOffsets[stringIndex] + 0x80
                 };
                 Entries.Add(entry);
 
                 string relativePath = Path.GetRelativePath(inputDir, file);
+                List<string> addenda = new();
                 if (relativePath != Path.GetFileName(file))
                 {
-                    Addendum addendum = new();
-                    addendum.Path = relativePath;
+                    addenda.Add(file);
+                    int addendIndex = Array.IndexOf(addenda.ToArray(), file);
+                    Addendum addendum = new()
+                    {
+                        Path = relativePath,
+                        AddendumTableOffset = AddendumTableOffsets[addendIndex],
+                        Entry = entry,
+                        EntryNameTableOffset = entry.NameTableOffset,
+                        TimeStamp = 0
+                    };
                 }
-
             }
+            MetadataTableOffset = 0x80 + FileData.Length;
             MetaDataTableLength = ENTRY_SIZE * EntryCount;
-            using (var rkv = File.Create(Path.Combine(outputDir, Path.GetDirectoryName(inputDir) + ".RKV")))
+            EntryNameTableOffset = MetadataTableOffset + MetaDataTableLength;
+            AddendumTableOffset = EntryNameTableOffset + EntryNameTableLength;
+            using var rkv = File.Create(Path.Combine(outputDir, Path.GetDirectoryName(inputDir) + ".RKV"));
+            rkv.Write(Encoding.UTF8.GetBytes(Signature), 0x0, 1);
+            rkv.Write(BitConverter.GetBytes(EntryCount), 0x4, 1);
+            rkv.Write(BitConverter.GetBytes(EntryNameTableLength), 0x8, 1);
+            rkv.Write(BitConverter.GetBytes(AddendumCount), 0xC, 1);
+            rkv.Write(BitConverter.GetBytes(AddendumTableLegnth), 0x10, 1);
+            rkv.Write(BitConverter.GetBytes(MetadataTableOffset), 0x14, 1);
+            rkv.Write(BitConverter.GetBytes(MetaDataTableLength), 0x18, 1);
+            rkv.Write(new byte[] { 0x0F, 0x07, 0x0F, 0x07, 0x30, 0x03 }, 0x1C, 1);
+            rkv.Write(Enumerable.Repeat((byte)0x0, 0x5E).ToArray(), 0x22, 1);
+            rkv.Write(FileData, 0x80, 1);
+            int entryIndex = 0;
+            foreach(Entry entry in Entries)
             {
-                rkv.Write(Encoding.UTF8.GetBytes(Signature), 0x0, 1);
-                rkv.Write(BitConverter.GetBytes(EntryCount), 0x4, 1);
-                rkv.Write(BitConverter.GetBytes(EntryNameTableLength), 0x8, 1);
-                rkv.Write(BitConverter.GetBytes(AddendumCount), 0xC, 1);
-                rkv.Write(BitConverter.GetBytes(AddendumTableLegnth), 0x10, 1);
-                rkv.Write(BitConverter.GetBytes(MetadataTableOffset), 0x14, 1);
-                rkv.Write(BitConverter.GetBytes(MetaDataTableLength), 0x18, 1);
+                rkv.Write(BitConverter.GetBytes(entry.NameTableOffset), MetadataTableOffset + (ENTRY_SIZE * entryIndex), 1);
+                rkv.Write(BitConverter.GetBytes(entry.Size), MetadataTableOffset + (ENTRY_SIZE * entryIndex) + 0x8, 1);
+                rkv.Write(BitConverter.GetBytes(entry.Offset), MetadataTableOffset + (ENTRY_SIZE * entryIndex) + 0xC, 1);
+                rkv.Write(BitConverter.GetBytes(entry.crc32eth), MetadataTableOffset + (ENTRY_SIZE * entryIndex) + 0x10, 1);
+                entryIndex++;
             }
+            rkv.Write(EntryNameTable, EntryNameTableOffset, 1);
+            int addendumIndex = 0;
+            foreach(Addendum addendum in Addenda)
+            {
+                rkv.Write(BitConverter.GetBytes(addendum.AddendumTableOffset), AddendumDataOffset + (ADDENDUM_SIZE * addendumIndex), 1);
+                rkv.Write(BitConverter.GetBytes(addendum.TimeStamp), AddendumDataOffset + (ADDENDUM_SIZE * addendumIndex) + 0x8, 1);
+                rkv.Write(BitConverter.GetBytes(addendum.EntryNameTableOffset), AddendumDataOffset + (ADDENDUM_SIZE * addendumIndex) + 0xC, 1);
+                addendumIndex++;
+            }
+            rkv.Write(AddendumTable, AddendumTableOffset, 1);
         }
     }
 }
