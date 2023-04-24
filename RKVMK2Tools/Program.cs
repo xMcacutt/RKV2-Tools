@@ -32,7 +32,17 @@ namespace RKV2_Tools
 
         public static void PrintHelp()
         {
-
+            Console.Clear();
+            Console.WriteLine("EXTRACTION");
+            Console.WriteLine("\"extract\" - extract either the entirety of an RKV or select a file to extract\n" +
+                "All files will be output to the selected output directory with the filesystem intact.");
+            Console.WriteLine(" ");
+            Console.WriteLine("REPACKING");
+            Console.WriteLine("\"repack\" - repack an entire directory into an RKV\n" +
+                               "All files (even in nested directories) will be repacked into the RKV.\n" +
+                               "The RKV will be output to the output directory and will inherit the name of the input directory.\n");
+            Console.WriteLine("Press Enter to return to the main interface.");
+            Console.ReadLine();
         }
 
         public static void Extract()
