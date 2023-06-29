@@ -10,6 +10,7 @@ namespace RKV2_Tools
     {
         public string? Name;
         public int NameTableOffset;
+        public int GroupingReference;
         public int Size;
         public int Offset;
         public int crc32eth;
