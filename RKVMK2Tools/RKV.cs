@@ -114,7 +114,7 @@ namespace RKV2_Tools
                 addendum.Path = Utility.ReadString(Data, AddendumTableOffset + addendum.AddendumTableOffset);
                 addendum.Entry = Entries.FirstOrDefault(E => E.NameTableOffset == addendum.EntryNameTableOffset);
 
-                f.WriteLine(addendum.Path);
+                //f.WriteLine(addendum.Path);
 
                 completion = (float)((float)(i + 1) / (float)AddendumCount) * 100;
                 Console.WriteLine($"Loading Addendum Data {completion}%        ");
